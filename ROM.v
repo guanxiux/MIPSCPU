@@ -25,8 +25,8 @@
 *     (c) Copyright 1995-2018 Xilinx, Inc.                                     *
 *     All rights reserved.                                                     *
 *******************************************************************************/
-// You must compile the wrapper file RAM.v when simulating
-// the core, RAM. When compiling the wrapper file, be sure to
+// You must compile the wrapper file ROM.v when simulating
+// the core, ROM. When compiling the wrapper file, be sure to
 // reference the XilinxCoreLib Verilog simulation library. For detailed
 // instructions, please refer to the "CORE Generator Help".
 
@@ -36,18 +36,12 @@
 
 `timescale 1ns/1ps
 
-module RAM(
+module ROM(
   a,
-  d,
-  clk,
-  we,
   spo
 );
 
 input [9 : 0] a;
-input [31 : 0] d;
-input clk;
-input we;
 output [31 : 0] spo;
 
 // synthesis translate_off
@@ -57,8 +51,8 @@ output [31 : 0] spo;
     .C_DEFAULT_DATA("0"),
     .C_DEPTH(1024),
     .C_FAMILY("spartan6"),
-    .C_HAS_CLK(1),
-    .C_HAS_D(1),
+    .C_HAS_CLK(0),
+    .C_HAS_D(0),
     .C_HAS_DPO(0),
     .C_HAS_DPRA(0),
     .C_HAS_I_CE(0),
@@ -73,9 +67,9 @@ output [31 : 0] spo;
     .C_HAS_QSPO_SRST(0),
     .C_HAS_SPO(1),
     .C_HAS_SPRA(0),
-    .C_HAS_WE(1),
-    .C_MEM_INIT_FILE("RAM.mif"),
-    .C_MEM_TYPE(1),
+    .C_HAS_WE(0),
+    .C_MEM_INIT_FILE("ROM.mif"),
+    .C_MEM_TYPE(0),
     .C_PARSER_TYPE(1),
     .C_PIPELINE_STAGES(0),
     .C_QCE_JOINED(0),
@@ -88,12 +82,12 @@ output [31 : 0] spo;
   )
   inst (
     .A(a),
-    .D(d),
-    .CLK(clk),
-    .WE(we),
     .SPO(spo),
+    .D(),
     .DPRA(),
     .SPRA(),
+    .CLK(),
+    .WE(),
     .I_CE(),
     .QSPO_CE(),
     .QDPO_CE(),

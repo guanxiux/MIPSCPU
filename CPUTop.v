@@ -18,80 +18,245 @@
 // Additional Comments: 
 //
 //////////////////////////////////////////////////////////////////////////////////
-module CPUTop(
+module CPUTop #(
+	parameter RAM_addr_range = 4
+)
+(
 	input clk,
-	input rst_n
+	input rst_n,
+	input single_step,
+	input recover,
+	input seg_control_request,
+	input seg_output_control_upper,
+	input [RAM_addr_range : 0]input_addr,
+	output [7:0]seg,
+	output [3:0]an
     );
-wire [31:0] PC;
-wire [31:0] NextPC;
+	 
+wire [9 : 0] external_addr_control;
+wire signal_end_of_program;
+wire [31:0] spo;
 
-wire [31:0] WD;
-wire [31:0] RD;
-wire [31:0] PCTemp;
-wire [31:0] ALUOutTemp;
-wire [31:0] Adr;
-wire [4:0] A1;
-wire [4:0] A2;
-wire [4:0] A3;
-wire [31:0] WD3; 
-wire [31:0] RD1;
-wire [31:0] RD2;
-reg [31:0] A;
-reg [31:0] B;
-wire [15:0]ControlSignal;
-wire PCEn;
+reg [4:0] end_count;
+always @(posedge clk or negedge rst_n)begin
+	if(!rst_n)
+		end_count <= 0;
+	else if(signal_end_of_program && end_count <= 5)
+		end_count <= end_count + 1;
+end
+assign signal_end_of_program = (Instr[31:26] == 6'b0000_10 && PC == JumpAddr + 4 && if_Jump && rst_n) ? 1 : 0;
+ExternalRAMAddrControl Control(rst_n, clk, seg_control_request, input_addr, external_addr_control);
+// input rst_n,
+// input [31:0]spo,
+// input clk,
+// input seg_output_control_upper,
+// output reg [7:0] y,
+// output reg [3:0]l
 
-wire Jump;
-wire IorD;
-wire [3:0]MEMWrite;
-wire IRWrite;
-wire PCWrite;
-wire Branch;
-wire PCSrc;
-wire [2:0]alu_op_main;
-wire [1:0]ALUSrcB;
-wire ALUSrcA;
-wire RegWrite;
-wire MEMtoReg;
-wire RegDst;
-wire [31:0]alu_a_main;
-wire [31:0]alu_b_main;
-wire [31:0]alu_out_main;
-wire Zero;
+seg segout(rst_n, spo, clk, seg_output_control_upper, seg, an);
+
+wire [31:0] if_NextPC;
+wire [31:0]JRAddr;
+wire [31:0]JumpAddr;
+wire [31:0]BranchAddr;
+
+wire [16:0] ControlSignal;
+
+wire flush;
+wire stall;
+
+wire [31:0] mem_dout;
+wire [4:0] id_RsAddr;
+wire [4:0] id_RtAddr;
+wire [4:0] id_RdAddr;
+wire [4:0] wb_RegWriteAddr;
+wire [31:0] wb_RegWriteData; 
+wire [31:0] id_RsData;
+wire [31:0] id_RtData;
+wire [4:0] ex_RegWriteAddr;
+
+wire [31:0] alu_a;
+wire [31:0] alu_b;
+wire [31:0] alu_out;
+wire ex_Less;
+wire ex_Equal;
+wire ex_Greater;
 wire overflow;
 
+wire wb_MemToReg;
+wire wb_RegWrite;
 
-PCounter pc(clk, rst_n, PCEn, NextPC, PC, Jump, Instr[25:0]);
+wire mem_MemRead;
+wire mem_MemWrite;
+wire mem_RegWrite;
+wire mem_MemToReg;
 
-wire [31:0]SignImm;
-SignExtend SE(Instr[15:0], SignImm);
+wire ex_RegWrite;
+wire ex_MemRead;
+wire [2:0] ex_ALUOp;
+wire ex_ALUSrcA;
+wire [1:0] ex_ALUSrcB;
+wire ex_RegDst;
+wire ex_BranchOnEqual;
+wire ex_BranchOnGreater;
+wire ex_BranchOnLess;
+wire ex_BranchTrue;
 
-assign Adr = (IorD == 0) ? PC : ALUOut;
-// input clka;
-// input [3 : 0] wea;
-// input [31 : 0] addra;
-// input [31 : 0] dina;
-// output [31 : 0] douta;
-RAM InstructionMemory(clk, MEMWrite, Adr, WD, RD);
+wire ex_breakpoint;
+wire if_Jump;
+wire if_JR;
+wire if_Branch;
+
+reg [31:0] PC;
+
+reg [offset_to_BranchOnLess + 1:0] id_ex_Control;
+reg [offset_to_mem_MemRead:0] ex_mem_Control;
+reg [offset_to_wb_MemToReg:0] mem_wb_Control;
+
+parameter offset_to_wb_MemToReg = 1;
+
+assign wb_MemToReg = mem_wb_Control[offset_to_wb_MemToReg - 1];
+assign wb_RegWrite = mem_wb_Control[offset_to_wb_MemToReg];
+
+parameter offset_to_mem_MemRead = 3;
+
+assign mem_MemRead = ex_mem_Control[offset_to_mem_MemRead];
+assign mem_MemWrite = ex_mem_Control[offset_to_mem_MemRead - 1];
+assign mem_RegWrite = ex_mem_Control[offset_to_mem_MemRead - 2];
+assign mem_MemToReg = ex_mem_Control[offset_to_mem_MemRead - 3];
+
+parameter offset_to_BranchOnLess = 13;
+
+assign ex_RegWrite = id_ex_Control[offset_to_mem_MemRead - 2];
+assign ex_MemRead = id_ex_Control[offset_to_mem_MemRead];
+assign ex_ALUOp = id_ex_Control[offset_to_BranchOnLess - 7 : offset_to_BranchOnLess - 9];
+assign ex_ALUSrcA = id_ex_Control[offset_to_BranchOnLess - 6];
+assign ex_ALUSrcB = id_ex_Control[offset_to_BranchOnLess - 4 : offset_to_BranchOnLess - 5];
+assign ex_RegDst = id_ex_Control[offset_to_BranchOnLess - 3];
+assign ex_BranchOnGreater = id_ex_Control[ offset_to_BranchOnLess - 2 ];
+assign ex_BranchOnEqual = id_ex_Control[ offset_to_BranchOnLess - 1 ];
+assign ex_BranchOnLess = id_ex_Control[ offset_to_BranchOnLess];
+assign ex_breakpoint = id_ex_Control [ 14 ];
+
+
+parameter offset_to_jump = 16;
+
+
+assign if_JR = ControlSignal[ offset_to_jump - 1];
+assign if_Jump = ControlSignal[ offset_to_jump ];
+assign if_Branch = ControlSignal[offset_to_BranchOnLess - 2] | ControlSignal[offset_to_BranchOnLess - 1] | ControlSignal[offset_to_BranchOnLess];
+
+assign flush = ex_BranchTrue;
+
+reg [31:0] if_id_NextPC;
 reg [31:0] Instr;
-wire [31:0] Data;
-always @(posedge clk)begin
-	if (IRWrite) begin
-		Instr <= RD;
+
+reg [31:0] id_ex_NextPC;
+reg [4:0] id_ex_RsAddr;
+reg [4:0] id_ex_RtAddr;
+reg [4:0] id_ex_RdAddr;
+reg [31:0] id_ex_RsData;
+reg [31:0] id_ex_RtData;
+reg [31:0] id_ex_SignExtended;
+
+reg [1:0] ex_mem_ALUSrcB;
+reg [31:0] ex_mem_AluOut;
+reg [31:0] ex_mem_MemWriteData;
+reg [4:0] ex_mem_RegWriteAddr;
+
+reg [31:0] mem_wb_Dout;
+reg [31:0] mem_wb_AluOut;
+reg [4:0] mem_wb_RegWriteAddr;
+
+    // input clk,
+    // input rst_n,
+    // input overflow,
+    // input instr_break,
+    // input single_step,
+    // input recover,
+    // input if_JR,
+    // output reg interrupt,
+    // output [31:0]interruption_service_PC,
+    // output [31:0]recovery_service_PC
+wire interrupt;
+wire [31:0]interruption_service_PC;
+wire [31:0]saved_PC;
+wire [31:0]recovery_service_PC;
+
+Interruption CheckInterruption(clk, rst_n, overflow, ex_breakpoint, single_step, if_JR, interrupt, interruption_service_PC, recovery_service_PC);
+
+always @(posedge clk or negedge rst_n)begin
+	if (!rst_n || flush || interrupt) begin
+		if (flush || interrupt) begin
+			id_ex_Control <= 0;
+			mem_wb_Control <= ex_mem_Control[1 : 0];
+			if(!interrupt)
+				ex_mem_Control <= 0;
+			else ex_mem_Control <= 4'b10;
+		end
+		else begin
+			id_ex_Control <= 0;
+			ex_mem_Control <= 0;
+			mem_wb_Control <= 0;
+		end
+	end
+	else begin 	
+		ex_mem_Control <= id_ex_Control[offset_to_mem_MemRead:0];
+		mem_wb_Control <= ex_mem_Control[offset_to_wb_MemToReg:0];
+		if(!stall)
+			id_ex_Control <= ControlSignal[offset_to_BranchOnLess + 1 : 0];
+		else id_ex_Control <= 0;
 	end
 end
-assign Data = RD;
-assign WD = B;
 
+assign if_NextPC = PC + 4;
 
-always@(posedge clk)begin
-	A <= RD1;
-	B <= RD2;
+reg [31:0] if_PCTemp;
+always @(posedge clk or negedge rst_n)begin
+	if(!rst_n)begin
+		PC <= 32'b0;
+		Instr <= 32'b0;
+		if_id_NextPC <= if_NextPC;
+	end
+	else if(!stall) begin
+		PC <= 	
+			  	ex_BranchTrue 	? if_PCTemp 				:
+			  	if_JR 		   	? JRAddr    				: 
+				recover			? recovery_service_PC		:
+				interrupt 		? interruption_service_PC 	:
+			  	if_Jump  	   	? JumpAddr  				:
+							 	  if_NextPC  				;
+		if_PCTemp <= (if_Branch == 1 ? BranchAddr : if_PCTemp);
+		if_id_NextPC <= (ex_BranchTrue == 1) ? if_PCTemp + 4 : if_NextPC;
+		if(!flush && !if_JR && !if_Jump && !interrupt)
+			Instr <= InstrOut;
+		else Instr <= 32'b0;
+	end
 end
-assign WD3 = (MEMtoReg == 1) ? Data : ALUOut; 
-assign A1 = Instr[25:21];
-assign A2 = Instr[20:16];
-assign A3 = (RegDst == 1) ? Instr[15:11] : Instr[20:16];
+
+wire Undefined;
+
+assign JRAddr = id_RsData;
+assign JumpAddr = {if_id_NextPC[31:28] , Instr[25:0], 2'b0};
+assign BranchAddr = SignImm * 4 + if_id_NextPC;
+
+wire [31:0] InstrOut;
+// input [9 : 0] a;
+// output [31 : 0] spo;
+ROMForPersonal InstructionMemory(PC[11:2], InstrOut);
+
+Decoder decode(
+   Instr,
+   ControlSignal,
+	Undefined
+);  
+
+assign id_RsAddr = Instr[25:21];
+assign id_RtAddr = Instr[20:16];
+assign id_RdAddr = Instr[15:11];
+
+assign wb_RegWriteAddr = mem_wb_RegWriteAddr;
+assign wb_RegWriteData = (wb_MemToReg == 1) ? mem_wb_Dout : mem_wb_AluOut;
 //  input clk,
 // 	input rst_n,
 // 	input [4:0]rAddr1,
@@ -101,45 +266,96 @@ assign A3 = (RegDst == 1) ? Instr[15:11] : Instr[20:16];
 // 	input [4:0]wAddr,
 // 	input [31:0]wDin,
 // 	input wEna
-RegisterFile Reg(clk, rst_n, A1, RD1, A2, RD2, A3, WD3, RegWrite);
+RegisterFile Reg(clk, rst_n, id_RsAddr, id_RsData, id_RtAddr, id_RtData, wb_RegWriteAddr, wb_RegWriteData, wb_RegWrite);
 
+// module Hazard(
+//     input [4:0] ex_RegWriteAddr,
+//     input [4:0] id_RsAddr,
+//     input [4:0] id_RtAddr,
+//     input ex_MemRead,
+//     input ex_RegWrite,
+//     output stall
+// );
+Hazard HazardDetector(ex_RegWriteAddr, id_RsAddr, id_RtAddr, ex_MemRead, ex_RegWrite, stall);
 
+wire [31:0] SignImm;
+SignExtend SE(Instr[15:0], SignImm);
 
-assign PCEn = (PCWrite == 1 || (Branch&Zero) == 1) ? 1 : 0;
-
-assign Jump = ControlSignal[15];
-assign IorD = ControlSignal[14];
-assign MEMWrite = ControlSignal[13] ? 4'b1111 : 4'b0;
-assign IRWrite = ControlSignal[12];
-assign PCWrite = ControlSignal[11];
-assign Branch = ControlSignal[10];
-assign PCSrc = ControlSignal[9];
-assign alu_op_main = ControlSignal[8:6];
-assign ALUSrcB = ControlSignal[5:4];
-assign ALUSrcA = ControlSignal[3];
-assign RegWrite = ControlSignal[2];
-assign MEMtoReg = ControlSignal[1];
-assign RegDst = ControlSignal[0];
-Control ControlUnit(clk, rst_n, Instr[31:26], Instr[5:0], ControlSignal, Zero);
-
-
-
-assign alu_a_main = (ALUSrcA == 0) ? PC : A;
-assign alu_b_main = (ALUSrcB == 2'b0) ? 	    B :
-					(ALUSrcB == 2'b1) ? 	    4 :
-					(ALUSrcB == 2'b10) ? SignImm :
-					(ALUSrcB == 2'b11) ? SignImm << 2 : 0;
-assign Zero = (alu_out_main == 0) ? 1'b1 : 1'b0;
-ALU MainAlu(alu_a_main, alu_b_main, alu_op_main, alu_out_main, overflow);
-
-reg [31:0]ALUOut;
 always @(posedge clk)begin
-	ALUOut <= alu_out_main;
+	// id_ex_ZeroExtended <= {16'b0, Instr[15:0]};
+	if(!stall) begin
+		id_ex_SignExtended <= SignImm;
+		id_ex_RsData <= id_RsData;
+		id_ex_RtData <= id_RtData;
+		id_ex_RsAddr <= id_RsAddr;
+		id_ex_RtAddr <= id_RtAddr;
+		id_ex_RdAddr <= id_RdAddr;
+		id_ex_NextPC <= if_id_NextPC;
+	end
 end
 
+assign alu_a =  (ex_ALUSrcB == 1) ? id_ex_SignExtended[10:6]:
+				(AForward == 0) ? id_ex_RsData :
+			    (AForward == 1) ? ex_mem_AluOut :
+			   	  				 wb_RegWriteData;
+assign alu_b =  (ex_ALUSrcA == 1) ? id_ex_SignExtended : 
+			    (BForward == 0) ? id_ex_RtData :
+				(BForward == 1) ? ex_mem_AluOut :
+								 wb_RegWriteData ;
+ALU MainAlu(ex_ALUSrcB ,alu_a, alu_b, ex_ALUOp, alu_out, ex_Less, ex_Equal, ex_Greater, overflow);
 
-assign NextPC = (PCSrc == 0) ? alu_out_main : ALUOut;
+assign ex_BranchTrue = (ex_BranchOnEqual & ex_Equal) | (ex_BranchOnGreater & ex_Greater) | (ex_BranchOnLess & ex_Less);
 
+wire [1:0] AForward;
+wire [1:0] BForward;
+
+// module Forwarding(
+//     input [4:0] ex_mem_RegWriteAddr,
+//     input [4:0] mem_wb_RegWriteAddr,
+//     input mem_MemRead,
+//     input mem_RegWrite,
+//     input wb_RegWrite,
+//     input [4:0] id_ex_RsAddr,
+//     input [4:0] id_ex_RtAddr,
+//     output AForwarding,
+//     output BForwarding
+// );
+Forwarding Forward(ex_mem_RegWriteAddr, mem_wb_RegWriteAddr, mem_MemRead, mem_RegWrite, wb_RegWrite, id_ex_RsAddr, id_ex_RtAddr, AForward, BForward );
+
+assign ex_RegWriteAddr = (interrupt) ? 5'd31 : (ex_RegDst == 1) ? id_ex_RdAddr : id_ex_RtAddr;
+
+always @(posedge clk)begin
+	ex_mem_ALUSrcB <= ex_ALUSrcB;
+	ex_mem_AluOut <= (interrupt) ? id_ex_NextPC : alu_out;
+	ex_mem_MemWriteData <=  (BForward == 0) ? id_ex_RtData :
+							(mem_MemToReg == 1) ? mem_dout :
+								 			 ex_mem_AluOut ;
+	ex_mem_RegWriteAddr <= ex_RegWriteAddr;
+end
+
+// input [9 : 0] a;
+// input [31 : 0] d;
+// input clk;
+// input we;
+// output [31 : 0] spo;
+
+wire [9 : 0] DataMemotyAddr;
+
+assign DataMemotyAddr = (signal_end_of_program && end_count >= 4 ) ? external_addr_control : ex_mem_AluOut[11 : 2];
+
+RAM DataMemoty(DataMemotyAddr, ex_mem_MemWriteData, clk, mem_MemWrite, spo);
+
+assign mem_dout = (ex_mem_ALUSrcB != 2) ? spo : 
+					(ex_mem_AluOut[1:0] == 0) ? {24'b0, spo[7:0]}  :
+					(ex_mem_AluOut[1:0] == 1) ? {24'b0, spo[15:8]} :
+					(ex_mem_AluOut[1:0] == 2) ? {24'b0, spo[23:16]}:
+												{24'b0, spo[31:24]};	
+
+always @(posedge clk)begin
+	mem_wb_Dout <= mem_dout;
+	mem_wb_AluOut <= ex_mem_AluOut;
+	mem_wb_RegWriteAddr <= ex_mem_RegWriteAddr;
+end
 endmodule
 
 

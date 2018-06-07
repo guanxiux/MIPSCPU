@@ -47,8 +47,8 @@ always @(posedge clk or negedge rst_n) begin
 		if (wEna) 
 			file[wAddr] = wDin;
 	end
-assign rDout1 = file[rAddr1];
-assign rDout2 = file[rAddr2];
+assign rDout1 = (rAddr1 == wAddr && wEna == 1) ? wDin : file[rAddr1];
+assign rDout2 = (rAddr2 == wAddr && wEna == 1) ? wDin : file[rAddr2];
 
 
 endmodule
